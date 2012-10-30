@@ -14,6 +14,7 @@ abstract class FeedsXPathParserBase extends FeedsParser {
   protected $rawXML = array();
   protected $doc = NULL;
   protected $xpath = NULL;
+  protected $all_nodes = NULL;
 
   /**
    * Classes that use FeedsXPathParserBase must implement this.
@@ -33,6 +34,7 @@ abstract class FeedsXPathParserBase extends FeedsParser {
    */
   public function parse(FeedsSource $source, FeedsFetcherResult $fetcher_result) {
     $source_config = $source->getConfigFor($this);
+    $state = $source->state(FEEDS_PARSE);
 
     if (empty($source_config)) {
       $source_config = $this->getConfig();
@@ -48,15 +50,30 @@ abstract class FeedsXPathParserBase extends FeedsParser {
     $fetcher_config = $source->getConfigFor($source->importer->fetcher);
     $parser_result->link = $fetcher_config['source'];
 
-    $this->xpath = new FeedsXPathParserDOMXPath($this->doc);
+    if (empty($this->xpath)) {
+      $this->xpath = new FeedsXPathParserDOMXPath($this->doc);
+    }
+    
     $config = array();
     $config['debug'] = array_keys(array_filter($source_config['exp']['debug']));
     $config['errors'] = $source_config['exp']['errors'];
 
     $this->xpath->setConfig($config);
-    $all_nodes = $this->xpath->namespacedQuery($source_config['context'], NULL, 'context');
 
-    foreach ($all_nodes as $node) {
+    if (empty($this->all_nodes)) {
+      $this->all_nodes = $this->xpath->namespacedQuery($source_config['context'], NULL, 'context');
+    }
+    $state->total = $this->all_nodes->length;
+
+    $start = $state->pointer ? $state->pointer : 0;
+    $limit = $start + $source->importer->getLimit();
+    $end = ($limit > $state->total) ? $state->total : $limit;
+
+    $progress = $state->pointer ? $state->pointer : 0;
+    $state->progress($state->total, $progress);
+
+    for ($i = $start; $i < $end; $i++) {
+      $node = $this->all_nodes->item($i);
       $parsed_item = $variables = array();
       foreach ($source_config['sources'] as $source => $query) {
         // Variable substitution.
@@ -77,8 +94,12 @@ abstract class FeedsXPathParserBase extends FeedsParser {
         $parser_result->items[] = $parsed_item;
       }
     }
-    unset($this->doc);
-    unset($this->xpath);
+
+    $state->pointer = $end;
+    if ($progress == $state->total) {
+      unset($this->doc);
+      unset($this->xpath);
+    }    
     return $parser_result;
   }
 
